@@ -8,10 +8,17 @@
     → 뉴스레터_2026.03.25.html  (이메일 발송용 HTML)
     → 뉴스레터_2026.03.25.docx  (검수/수정용 Word 파일 — HTML 소스코드)
 
-입력 JSON 형식: 기존과 동일 (README 참고)
+입력 JSON 형식: SKILL.md Step 4 참고
+
+v1.2 변경:
+  - 모든 섹션 항목에 선택 필드 `footnotes`(문자열 배열) 지원
+    → 출처 아래에 회색 12px 각주 블록(<!--각주 시작--> ~ <!--/각주 끝-->)으로 출력
+  - `source`에 "출처 –"가 이미 포함돼 있으면 자동 제거 (중복 표기 방지)
+  - JSON 로드 시 BOM(utf-8-sig) 허용
 """
 
 import json
+import re
 import sys
 import os
 from docx import Document as DocxDocument
@@ -33,7 +40,7 @@ DOMESTIC_ARTICLE_BLOCK = """<!-- {n}번 국내기사 시작-->
 {note_block}{extra_link_block}<!--국내기사 출처 시작-->
 <p style="margin:0 40px 0 40px; padding-top:8px; color:#414454; font-family:'Noto Sans CJK KR', Dotum,'돋움',sans-serif; font-size:14px; font-weight:bold; letter-spacing:-0.035em; line-height:1.7;">출처 – {source}</p>
 <!--/국내기사 출처 끝-->
-</td>
+{footnote_block}</td>
 </tr>
 <!-- {n}번 국내기사 끝-->"""
 
@@ -65,7 +72,7 @@ INTERNATIONAL_ARTICLE_BLOCK = """<!-- {n}번 해외기사 시작-->
 {ref_block}<!--해외기사 출처 시작-->
 <p style="margin:0 40px 0 40px; padding-top:8px; color:#414454; font-family:'Noto Sans CJK KR', Dotum,'돋움',sans-serif; font-size:14px; font-weight:bold; letter-spacing:-0.035em; line-height:1.7;">출처 – {source}</p>
 <!--/해외기사 출처 끝-->
-</td>
+{footnote_block}</td>
 </tr>
 <!-- {n}번 해외기사 끝-->"""
 
@@ -87,9 +94,14 @@ JOURNAL_ARTICLE_BLOCK = """<!-- {n}번 최신논문 시작-->
 <!--최신논문기사 출처 시작-->
 <p style="margin:0 40px 0 40px; padding-top:8px; color:#414454; font-family:'Noto Sans CJK KR', Dotum,'돋움',sans-serif; font-size:14px; font-weight:bold; letter-spacing:-0.035em; line-height:1.7;">출처 – {source}</p>
 <!--/최신논문기사 출처 끝-->
-</td>
+{footnote_block}</td>
 </tr>
 <!-- {n}번 최신논문 끝-->"""
+
+FOOTNOTE_BLOCK = """<!--각주 시작-->
+<p style="margin:0 40px 0 40px; padding-top:6px; color:#8a8d99; font-family:'Noto Sans CJK KR', Dotum,'돋움',sans-serif; font-size:12px; letter-spacing:-0.035em; line-height:1.6; word-break:keep-all;">{lines}</p>
+<!--/각주 끝-->
+"""
 
 SPACER = """<tr>
 <td height="30" style="font-size:0; line-height:0;">&nbsp;</td>
@@ -166,6 +178,28 @@ FULL_TEMPLATE = """<table cellpadding="0" cellspacing="0" border="0" align="cent
 </table>"""
 
 
+# ─── 공통 헬퍼 ───
+
+_SOURCE_PREFIX = re.compile(r"^\s*출처\s*[–\-—:]\s*")
+
+
+def clean_source(source):
+    """source 필드에 '출처 –'가 들어와도 한 번만 출력되도록 접두어 제거."""
+    return _SOURCE_PREFIX.sub("", source or "").strip()
+
+
+def build_footnote_block(art):
+    """footnotes: ["* 용어 설명", ...] (문자열 1개도 허용). 없으면 빈 문자열."""
+    notes = art.get("footnotes") or []
+    if isinstance(notes, str):
+        notes = [notes]
+    notes = [n.strip() for n in notes if n and n.strip()]
+    if not notes:
+        return ""
+    lines = [n if n[0] in "*※¹²³⁴⁵⁶⁷⁸⁹" else "* " + n for n in notes]
+    return FOOTNOTE_BLOCK.format(lines="<br/>\n".join(lines))
+
+
 # ─── 섹션 빌더 ───
 
 def build_domestic_articles(articles):
@@ -185,8 +219,9 @@ def build_domestic_articles(articles):
             )
         block = DOMESTIC_ARTICLE_BLOCK.format(
             n=i, agency_block=agency_block, title=art["title"],
-            link=art["link"], summary=art["summary"], source=art["source"],
-            note_block=note_block, extra_link_block=extra_link_block
+            link=art["link"], summary=art["summary"], source=clean_source(art["source"]),
+            note_block=note_block, extra_link_block=extra_link_block,
+            footnote_block=build_footnote_block(art)
         )
         blocks.append(block)
     return SPACER.join(blocks) + SPACER
@@ -202,7 +237,8 @@ def build_international_articles(articles):
             )
         block = INTERNATIONAL_ARTICLE_BLOCK.format(
             n=i, title=art["title"], link=art["link"],
-            summary=art["summary"], source=art["source"], ref_block=ref_block
+            summary=art["summary"], source=clean_source(art["source"]), ref_block=ref_block,
+            footnote_block=build_footnote_block(art)
         )
         blocks.append(block)
     return SPACER.join(blocks) + SPACER
@@ -213,7 +249,8 @@ def build_journal_articles(articles):
     for i, art in enumerate(articles, 1):
         block = JOURNAL_ARTICLE_BLOCK.format(
             n=i, title=art["title"], link=art["link"],
-            summary=art["summary"], source=art["source"]
+            summary=art["summary"], source=clean_source(art["source"]),
+            footnote_block=build_footnote_block(art)
         )
         blocks.append(block)
     return SPACER.join(blocks) + SPACER
@@ -275,8 +312,16 @@ def main():
     html_path = output_basename + '.html'
     docx_path = output_basename + '.docx'
 
-    with open(input_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    # utf-8-sig: BOM이 붙은 JSON도 허용. JSON은 반드시
+    # json.dump(data, f, ensure_ascii=False, indent=2) 로 작성할 것 (SKILL.md Step 4)
+    try:
+        with open(input_path, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        print(f"[오류] JSON 로드 실패: {e}")
+        print("  → JSON을 문자열로 직접 조립하지 말고 Python json.dump(..., ensure_ascii=False)로 다시 저장하세요.")
+        print("  → 요약문 안의 큰따옴표(\")·줄바꿈이 이스케이프되지 않은 경우가 가장 흔한 원인입니다.")
+        sys.exit(1)
 
     # 1) HTML 생성
     html = generate_html(data)
@@ -290,12 +335,16 @@ def main():
     n_domestic = len(data["domestic"])
     n_international = len(data["international"])
     n_journals = len(data["journals"])
+    n_footnotes = sum(1 for sec in ("domestic", "international", "journals")
+                      for a in data[sec] if a.get("footnotes"))
     print(f"뉴스레터 생성 완료!")
     print(f"  HTML: {html_path}")
     print(f"  DOCX: {docx_path}")
     print(f"  국내 정책·연구: {n_domestic}건")
     print(f"  해외 정책·연구: {n_international}건")
     print(f"  최신 연구 동향: {n_journals}건")
+    if n_footnotes:
+        print(f"  각주 포함 항목: {n_footnotes}건")
 
 
 if __name__ == "__main__":
